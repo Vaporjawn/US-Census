@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Card,
   CardContent,
@@ -20,10 +20,13 @@ import {
   FormControl,
   InputLabel,
   Box,
+  Tabs,
+  Tab,
 } from '@mui/material';
-import { Download } from '@mui/icons-material';
+import { Download, Refresh, BarChart as BarChartIcon, TableChart as TableChartIcon } from '@mui/icons-material';
 import censusApi from '../../services/censusApi';
 import { useStates, useCounties } from '../../hooks/useCensusData';
+import DataVisualizer from '../Visualizations/DataVisualizer';
 
 interface CensusData {
   headers: string[];
@@ -40,12 +43,28 @@ const ACSExplorer: React.FC = () => {
   const [data, setData] = useState<CensusData | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoLoaded, setAutoLoaded] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<'table' | 'chart'>('chart'); // Default to chart view
 
   const { states } = useStates();
   const { counties } = useCounties(selectedState);
 
-  const handleFetch = async () => {
-    setLoading(true);
+  // Auto-load data on component mount
+  useEffect(() => {
+    if (!autoLoaded) {
+      const loadInitialData = async () => {
+        await handleFetch(true);
+      };
+      loadInitialData();
+      setAutoLoaded(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleFetch = async (silent: boolean = false) => {
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -77,7 +96,9 @@ const ACSExplorer: React.FC = () => {
       const errorMessage = err instanceof Error ? err.message : 'An error occurred';
       setError(errorMessage);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -100,9 +121,16 @@ const ACSExplorer: React.FC = () => {
   return (
     <Card>
       <CardContent>
-        <Typography variant="h5" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
-          📊 American Community Survey (ACS) Data
-        </Typography>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+          <Typography variant="h5" sx={{ fontWeight: 600 }}>
+            📊 American Community Survey (ACS) Data
+          </Typography>
+          {data && (
+            <Typography variant="caption" color="text.secondary">
+              {data.data.length} records loaded • Cached data
+            </Typography>
+          )}
+        </Box>
 
         <Grid container spacing={2} sx={{ mb: 3 }}>
           <Grid item xs={12} md={3}>
@@ -185,11 +213,20 @@ const ACSExplorer: React.FC = () => {
             <Box sx={{ display: 'flex', gap: 2 }}>
               <Button
                 variant="contained"
-                onClick={handleFetch}
+                onClick={() => handleFetch()}
                 disabled={loading}
                 sx={{ minWidth: 120 }}
               >
                 {loading ? <CircularProgress size={24} /> : 'Fetch Data'}
+              </Button>
+
+              <Button
+                variant="outlined"
+                startIcon={<Refresh />}
+                onClick={() => handleFetch()}
+                disabled={loading}
+              >
+                Refresh
               </Button>
 
               {data && (
@@ -212,33 +249,68 @@ const ACSExplorer: React.FC = () => {
         )}
 
         {data && (
-          <TableContainer component={Paper} sx={{ mt: 3 }}>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {data.headers.map((header) => (
-                    <TableCell key={header} sx={{ fontWeight: 600 }}>
-                      {header}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {data.data.slice(0, 50).map((row, index) => (
-                  <TableRow key={index} hover>
-                    {data.headers.map((header) => (
-                      <TableCell key={header}>{row[header]}</TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            {data.data.length > 50 && (
-              <Typography variant="caption" sx={{ p: 2, display: 'block' }}>
-                Showing 50 of {data.data.length} rows
-              </Typography>
+          <>
+            {/* View Mode Tabs */}
+            <Box sx={{ borderBottom: 1, borderColor: 'divider', mt: 3 }}>
+              <Tabs
+                value={viewMode}
+                onChange={(_e, newValue) => setViewMode(newValue)}
+                aria-label="data view modes"
+              >
+                <Tab
+                  icon={<BarChartIcon />}
+                  iconPosition="start"
+                  label="Chart View"
+                  value="chart"
+                />
+                <Tab
+                  icon={<TableChartIcon />}
+                  iconPosition="start"
+                  label="Table View"
+                  value="table"
+                />
+              </Tabs>
+            </Box>
+
+            {/* Chart View */}
+            {viewMode === 'chart' && (
+              <DataVisualizer data={data.data} headers={data.headers} />
             )}
-          </TableContainer>
+
+            {/* Table View */}
+            {viewMode === 'table' && (
+              <TableContainer component={Paper} sx={{ mt: 3 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      {data.headers.map((header) => (
+                        <TableCell key={header} sx={{ fontWeight: 600 }}>
+                          {header}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {data.data.slice(0, 50).map((row, index) => (
+                      <TableRow key={index} hover>
+                        {data.headers.map((header) => (
+                          <TableCell key={header}>{row[header]}</TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {data.data.length > 50 && (
+                  <Box sx={{ p: 2, textAlign: 'center' }}>
+                    <Typography variant="caption" color="text.secondary">
+                      Showing 50 of {data.data.length} rows •
+                      {data.data.length > 0 && ' Cached data'}
+                    </Typography>
+                  </Box>
+                )}
+              </TableContainer>
+            )}
+          </>
         )}
       </CardContent>
     </Card>

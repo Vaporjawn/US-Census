@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
+import cacheService from './cacheService';
 
 const BASE_URL = 'https://api.census.gov/data';
 
@@ -14,12 +15,16 @@ interface Geography {
 
 class CensusAPI {
   private client: AxiosInstance;
+  private readonly CACHE_TTL = 60 * 60 * 1000; // 1 hour cache
 
   constructor() {
     this.client = axios.create({
       baseURL: BASE_URL,
       timeout: 30000,
     });
+
+    // Clean up expired cache on initialization
+    cacheService.clearExpired();
   }
 
   /**
@@ -45,23 +50,36 @@ class CensusAPI {
   }
 
   /**
-   * Generic fetch method for any Census dataset
+   * Generic fetch method for any Census dataset with caching
    */
   async fetchData(
     endpoint: string,
     variables: string | string[],
     geography: Geography,
     time: string | null = null,
-    additionalParams: Record<string, any> = {}
+    additionalParams: Record<string, any> = {},
+    useCache: boolean = true
   ): Promise<CensusResponse> {
+    const params = this.buildParams(variables, geography, time, additionalParams);
+    const cacheKey = cacheService.generateKey(endpoint, params);
+
+    // Check cache first
+    if (useCache) {
+      const cached = cacheService.get<CensusResponse>(cacheKey);
+      if (cached) {
+        console.log('Cache hit:', endpoint);
+        return cached;
+      }
+    }
+
     try {
-      const params = this.buildParams(variables, geography, time, additionalParams);
+      console.log('Fetching from API:', endpoint);
       const response = await this.client.get(endpoint, { params });
 
       // Census API returns array of arrays, first row is headers
       const [headers, ...rows] = response.data as string[][];
 
-      return {
+      const result: CensusResponse = {
         headers,
         data: rows.map((row: string[]) => {
           const obj: Record<string, string> = {};
@@ -72,6 +90,13 @@ class CensusAPI {
         }),
         raw: response.data as string[][],
       };
+
+      // Cache the result
+      if (useCache) {
+        cacheService.set(cacheKey, result, { ttl: this.CACHE_TTL });
+      }
+
+      return result;
     } catch (error) {
       console.error('Census API Error:', error);
       throw this.handleError(error as AxiosError);
@@ -304,6 +329,60 @@ class CensusAPI {
     } else {
       return new Error(`Request setup error: ${error.message}`);
     }
+  }
+
+  /**
+   * Preload commonly used datasets into cache
+   */
+  async preloadCommonData(): Promise<void> {
+    console.log('Preloading common Census datasets...');
+
+    const preloadTasks = [
+      // Preload states list
+      this.getStates(),
+
+      // Preload recent ACS 5-Year data for all states
+      this.getACS5Year(
+        '2023',
+        ['NAME', 'B01001_001E', 'B19013_001E', 'B25077_001E'],
+        { for: 'state:*' }
+      ),
+
+      // Preload recent SAIPE data
+      this.getSAIPE(
+        '2022',
+        ['NAME', 'SAEPOVALL_PT', 'SAEMHI_PT'],
+        { for: 'state:*' }
+      ),
+
+      // Preload recent SAHIE data
+      this.getSAHIE(
+        '2022',
+        ['NAME', 'PCTUI_PT'],
+        { for: 'state:*' }
+      ),
+    ];
+
+    try {
+      await Promise.allSettled(preloadTasks);
+      console.log('Common data preloaded successfully');
+    } catch (error) {
+      console.warn('Some preload tasks failed:', error);
+    }
+  }
+
+  /**
+   * Clear all cached data
+   */
+  clearCache(): void {
+    cacheService.clearAll();
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats() {
+    return cacheService.getStats();
   }
 }
 
